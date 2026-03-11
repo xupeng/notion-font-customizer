@@ -1,0 +1,12 @@
+__pycache__/
+*.egg-info/
+dist/
+build/
+.venv/
+.claude/settings.local.json
+.DS_Store
+
+# Notion proprietary files extracted from app.asar
+index.js
+preload.js
+package.json
