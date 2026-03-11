@@ -26,6 +26,12 @@ uv tool install .
 # or: pip install .
 ```
 
+Or install directly from the GitHub release:
+
+```bash
+uv tool install https://github.com/xupeng/notion-font-customizer/releases/download/v0.1.0/notion_font_customizer-0.1.0.tar.gz
+```
+
 ## Usage
 
 > `sudo` may be needed to write to `/Applications`.
