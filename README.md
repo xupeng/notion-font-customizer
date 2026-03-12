@@ -1,5 +1,7 @@
 # notion-font-customizer
 
+[中文](README.zh-CN.md)
+
 Custom font patcher for the macOS Notion desktop app.
 Injects CSS hot-reload into Notion's Electron asar bundle,
 allowing live font customization without restarting.
