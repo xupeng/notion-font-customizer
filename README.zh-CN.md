@@ -20,23 +20,21 @@ macOS Notion 桌面应用的自定义字体补丁工具。
 
 ## 使用方式
 
-> 向 `/Applications` 写入文件需要 `sudo` 权限。
-
 ### 即用（无需安装）
 
 ```bash
-sudo npx github:xupeng/notion-font-customizer          # 应用补丁
-sudo npx github:xupeng/notion-font-customizer --restore  # 还原原始状态
+npx github:xupeng/notion-font-customizer          # 应用补丁
+npx github:xupeng/notion-font-customizer --restore  # 还原原始状态
 ```
 
 ### 全局安装
 
 ```bash
 npm install -g github:xupeng/notion-font-customizer
-sudo notion-font-customizer          # 应用补丁
-sudo notion-font-customizer --restore  # 还原原始状态
-sudo nfc                              # apply 的简短别名
-sudo nfc --restore                    # restore 的简短别名
+notion-font-customizer          # 应用补丁
+notion-font-customizer --restore  # 还原原始状态
+nfc                              # apply 的简短别名
+nfc --restore                    # restore 的简短别名
 ```
 
 ## 工作原理

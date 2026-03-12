@@ -339,8 +339,8 @@ function restore(): void {
         `Error: backup version (${backupVer}) does not match current version (${currentVer}).\n` +
           `Notion has been updated; the old backup is no longer valid.\n` +
           `Delete the backup files and re-run the patcher:\n` +
-          `  sudo rm ${APP_ASAR_BAK} ${INFO_PLIST_BAK}\n` +
-          `  sudo notion-font-customizer`,
+          `  rm ${APP_ASAR_BAK} ${INFO_PLIST_BAK}\n` +
+          `  notion-font-customizer`,
       );
       process.exit(1);
     }
@@ -367,6 +367,20 @@ function restore(): void {
 
 async function patch(): Promise<void> {
   console.log('=== Notion Font Patcher ===\n');
+
+  // 如果备份存在且版本匹配，说明当前版本已打过补丁
+  if (fs.existsSync(APP_ASAR_BAK) && fs.existsSync(INFO_PLIST_BAK)) {
+    const currentVer = getNotionVersion(INFO_PLIST);
+    const backupVer = getNotionVersion(INFO_PLIST_BAK);
+    if (currentVer === backupVer) {
+      console.log(
+        `Already patched (version ${currentVer}). Nothing to do.\n` +
+          `  Run with --restore to revert.`,
+      );
+      return;
+    }
+  }
+
   backupAsar();
   extractAsar();
   injectPreload();
@@ -394,10 +408,10 @@ async function main(): Promise<void> {
         '  --restore  Restore original app.asar from backup\n' +
         '  --help     Show this help message\n\n' +
         'Examples:\n' +
-        '  sudo notion-font-customizer           # Apply patch\n' +
-        '  sudo notion-font-customizer --restore  # Restore original state\n' +
-        '  sudo nfc                              # Short alias for apply\n' +
-        '  sudo nfc --restore                    # Short alias for restore',
+        '  notion-font-customizer           # Apply patch\n' +
+        '  notion-font-customizer --restore  # Restore original state\n' +
+        '  nfc                              # Short alias for apply\n' +
+        '  nfc --restore                    # Short alias for restore',
     );
     return;
   }
