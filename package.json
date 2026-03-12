@@ -1,0 +1,30 @@
+{
+  "name": "notion-font-customizer",
+  "version": "0.2.0",
+  "description": "Custom font patcher for the macOS Notion desktop app",
+  "type": "module",
+  "bin": {
+    "notion-font-customizer": "./dist/index.js",
+    "nfc": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup && chmod +x dist/index.js",
+    "prepare": "tsup && chmod +x dist/index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": {
+    "name": "xupeng",
+    "email": "xupeng@xupeng.me"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@electron/asar": "^3.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.5.0"
+  }
+}

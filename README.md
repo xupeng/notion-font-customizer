@@ -15,28 +15,23 @@ allowing live font customization without restarting.
 ## Requirements
 
 - macOS
-- Python 3.10+
-- Node.js (`npx` + `asar`)
-- `uv` (recommended)
-
-## Installation
-
-```bash
-uv tool install .
-# or: pip install .
-```
-
-Or install directly from the GitHub release:
-
-```bash
-uv tool install https://github.com/xupeng/notion-font-customizer/releases/download/v0.1.0/notion_font_customizer-0.1.0.tar.gz
-```
+- Node.js >= 18
 
 ## Usage
 
-> `sudo` may be needed to write to `/Applications`.
+> `sudo` is required to write to `/Applications`.
+
+### One-shot (no install)
 
 ```bash
+sudo npx github:xupeng/notion-font-customizer          # Apply patch
+sudo npx github:xupeng/notion-font-customizer --restore  # Restore original
+```
+
+### Global install
+
+```bash
+npm install -g github:xupeng/notion-font-customizer
 sudo notion-font-customizer          # Apply patch
 sudo notion-font-customizer --restore  # Restore original
 sudo nfc                              # Short alias for apply
