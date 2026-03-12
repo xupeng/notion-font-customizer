@@ -1,8 +1,7 @@
-dist/
 node_modules/
 .claude/settings.local.json
 .DS_Store
 
 # Notion proprietary files extracted from app.asar
-index.js
-preload.js
+/index.js
+/preload.js

@@ -7,9 +7,11 @@
     "notion-font-customizer": "./dist/index.js",
     "nfc": "./dist/index.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsup && chmod +x dist/index.js",
-    "prepare": "tsup && chmod +x dist/index.js"
+    "build": "tsup && chmod +x dist/index.js"
   },
   "engines": {
     "node": ">=18.0.0"
