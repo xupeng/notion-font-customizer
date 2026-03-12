@@ -235,7 +235,7 @@ div.chat_sidebar * {
   font-family: "Caecilia LT Std", "Pridi", XinFang, "Noto Sans SC", STKaiti, -apple-system,
     BlinkMacSystemFont, "Segoe UI", Helvetica, "Apple Color Emoji",
     Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol" !important;
-  line-height: 1.7em !important;
+  line-height: 1.8em !important;
 }
 
 /* === 标题字体 === */
@@ -257,7 +257,7 @@ div.notion-page-block h3 {
 
 /* === 代码块字体（启用连字） === */
 div.notion-code-block div span {
-  font-family: "Fira Code", "JetBrains Mono", Consolas, monospace !important;
+  font-family: "FiraCode Nerd Font", "JetBrains Mono", Consolas, monospace !important;
   font-feature-settings: "liga" 1, "calt" 1;
 }
 `;
