@@ -21,23 +21,21 @@ allowing live font customization without restarting.
 
 ## Usage
 
-> `sudo` is required to write to `/Applications`.
-
 ### One-shot (no install)
 
 ```bash
-sudo npx github:xupeng/notion-font-customizer          # Apply patch
-sudo npx github:xupeng/notion-font-customizer --restore  # Restore original
+npx github:xupeng/notion-font-customizer          # Apply patch
+npx github:xupeng/notion-font-customizer --restore  # Restore original
 ```
 
 ### Global install
 
 ```bash
 npm install -g github:xupeng/notion-font-customizer
-sudo notion-font-customizer          # Apply patch
-sudo notion-font-customizer --restore  # Restore original
-sudo nfc                              # Short alias for apply
-sudo nfc --restore                    # Short alias for restore
+notion-font-customizer          # Apply patch
+notion-font-customizer --restore  # Restore original
+nfc                              # Short alias for apply
+nfc --restore                    # Short alias for restore
 ```
 
 ## How It Works
