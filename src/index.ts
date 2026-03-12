@@ -36,7 +36,7 @@ const CUSTOM_CSS = path.join(CONFIG_DIR, 'custom.css');
 const INJECT_MARKER = '// [notion-custom-font] injected';
 const INJECT_MAIN_MARKER = '// [notion-custom-font] main process injected';
 
-const INJECT_JS = `${INJECT_MARKER}
+const INJECT_JS = String.raw`${INJECT_MARKER}
 ;(function() {
   const { ipcRenderer } = require('electron');
   const STYLE_ID = 'notion-custom-font';
@@ -69,14 +69,18 @@ const INJECT_JS = `${INJECT_MARKER}
   }
 })();`;
 
-const INJECT_MAIN_JS = `${INJECT_MAIN_MARKER}
+const INJECT_MAIN_JS = String.raw`${INJECT_MAIN_MARKER}
 ;(function() {
   const { ipcMain, webContents } = require('electron');
+  const crypto = require('crypto');
   const fs = require('fs');
+  const https = require('https');
   const path = require('path');
   const cssPath = path.join(
     process.env.HOME || '', '.config', 'notion', 'custom.css'
   );
+  const fontsDir = path.join(process.env.HOME || '', '.config', 'notion', 'fonts');
+  try { fs.mkdirSync(fontsDir, { recursive: true }); } catch(e) {}
 
   function readCSS() {
     try {
@@ -84,66 +88,177 @@ const INJECT_MAIN_JS = `${INJECT_MAIN_MARKER}
     } catch (e) { return ''; }
   }
 
-  ipcMain.handle('notion-custom:get-css', () => readCSS());
+  function fetchURL(url) {
+    return new Promise((resolve, reject) => {
+      https.get(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
+      }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          fetchURL(res.headers.location).then(resolve, reject);
+          return;
+        }
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => resolve(data));
+      }).on('error', reject);
+    });
+  }
+
+  function fetchBinary(url) {
+    return new Promise((resolve, reject) => {
+      https.get(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
+      }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          fetchBinary(res.headers.location).then(resolve, reject);
+          return;
+        }
+        const chunks = [];
+        res.on('data', chunk => chunks.push(chunk));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+      }).on('error', reject);
+    });
+  }
+
+  async function resolveFontURLs(css) {
+    const fontUrlRe = /url\(\s*['"]?(https:\/\/fonts\.gstatic\.com\/[^'")\s]+)['"]?\s*\)/g;
+    let match;
+    const fonts = [];
+    while ((match = fontUrlRe.exec(css)) !== null) {
+      fonts.push({ full: match[0], url: match[1] });
+    }
+    if (fonts.length === 0) return css;
+    let resolved = css;
+    for (const font of fonts) {
+      try {
+        const hash = crypto.createHash('sha256').update(font.url).digest('hex');
+        const ext = font.url.match(/\.(woff2|woff|ttf|otf|eot)/i);
+        const suffix = ext ? '.' + ext[1].toLowerCase() : '.woff2';
+        const cached = path.join(fontsDir, hash + suffix);
+        let buf;
+        if (fs.existsSync(cached)) {
+          buf = fs.readFileSync(cached);
+        } else {
+          buf = await fetchBinary(font.url);
+          fs.writeFileSync(cached, buf);
+        }
+        const mime = 'font/' + suffix.slice(1);
+        const dataUri = 'data:' + mime + ';base64,' + buf.toString('base64');
+        resolved = resolved.replace(font.full, 'url(' + dataUri + ')');
+      } catch (e) {
+        console.error('[notion-custom-font] Failed to fetch font:', font.url, e.message || e);
+      }
+    }
+    return resolved;
+  }
+
+  async function resolveImports(css) {
+    // Branch matching: quoted (single/double) vs unquoted — handles URLs with embedded special chars
+    const importRe = /@import\s+url\(\s*(?:'([^']*)'|"([^"]*)"|([^)\s]+))\s*\)\s*;?/g;
+    let match;
+    const imports = [];
+    while ((match = importRe.exec(css)) !== null) {
+      imports.push({ full: match[0], url: match[1] || match[2] || match[3] });
+    }
+    if (imports.length === 0) return css;
+    let resolved = css;
+    for (const imp of imports) {
+      try {
+        const fetched = await fetchURL(imp.url);
+        resolved = resolved.replace(imp.full, fetched);
+      } catch (e) {
+        console.error('[notion-custom-font] Failed to fetch:', imp.url, e.message || e);
+      }
+    }
+    // Safety net: strip any remaining @import rules to prevent CSP violations
+    resolved = resolved.replace(/@import\s+url\([^)]*\)\s*;?/g, '/* [notion-custom-font] removed unresolved @import */');
+    return resolveFontURLs(resolved);
+  }
+
+  ipcMain.handle('notion-custom:get-css', async () => resolveImports(readCSS()));
 
   // Hot reload: fs.watch → broadcast to all renderers
   try {
     let debounceTimer;
     fs.watch(cssPath, () => {
       clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        const css = readCSS();
+      debounceTimer = setTimeout(async () => {
+        const css = await resolveImports(readCSS());
         webContents.getAllWebContents().forEach(wc => {
           if (!wc.isDestroyed()) wc.send('notion-custom:css-changed', css);
         });
       }, 200);
     });
   } catch (e) {}
+
 })();`;
 
-const DEFAULT_CSS = `/* Notion custom font configuration */
-/* Migrated from user's existing Stylus browser styles */
+const DEFAULT_CSS = `/* Notion 自定义字体配置 */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@100..900&family=Pridi:wght@200;300;400;500;600;700&family=Signika:wght@300..700&display=swap');
 
+/* === 中文字体映射 === */
 @font-face {
-    font-family: 'XinFang';
-    src: local('TsangerHuaXinTi');
-    font-weight: 400;
+  font-family: 'XinFang';
+  src: local('TsangerHuaXinTi');
+  font-weight: 400;
 }
 
 @font-face {
-    font-family: 'XinFang';
-    src: local('TsangerYunHei-W06');
-    font-weight: 600;
+  font-family: 'XinFang';
+  src: local('TsangerYunHei-W06');
+  font-weight: 600;
 }
 
-/* Body content font */
+@font-face {
+  font-family: 'XinFang';
+  src: local('TsangerYunHei-W06');
+  font-weight: 700;
+}
+
+@font-face {
+  font-family: 'YunHei';
+  src: local('TsangerYunHei-W06');
+  font-weight: 600;
+}
+
+@font-face {
+  font-family: 'YunHei';
+  src: local('TsangerYunHei-W06');
+  font-weight: 700;
+}
+
+/* === 正文内容字体 === */
 div.notion-page-content *,
-div.notion-page-block *,
 div.notion-collection-item *,
 div.layout-chat *,
 div.chat_sidebar * {
-    font-family: "Caecilia LT Std", XinFang, STKaiti, -apple-system,
-        BlinkMacSystemFont, "Segoe UI", Helvetica, "Apple Color Emoji",
-        Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol" !important;
-    line-height: 1.7em !important;
+  font-family: "Caecilia LT Std", "Pridi", XinFang, "Noto Sans SC", STKaiti, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", Helvetica, "Apple Color Emoji",
+    Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol" !important;
+  line-height: 1.7em !important;
 }
 
-/* Heading font */
+/* === 标题字体 === */
+/* notion-page-block 同时出现在正文和此处，
+   此规则在后面声明，优先级更高，确保标题使用 Space Grotesk */
 div.notion-header-block span,
 div.notion-header-block div,
 div.notion-sub_header-block span,
 div.notion-sub_header-block div,
+div.notion-sub_sub_header-block span,
+div.notion-sub_sub_header-block div,
 div.notion-page-block span,
 div.notion-page-block div,
 div.notion-page-block h1,
-div.notion-sub_sub_header-block span,
-div.notion-sub_sub_header-block div {
-    font-family: "Arial Rounded MT Bold", "Caecilia LT Std", "PingFang TC", STKaiti !important;
+div.notion-page-block h2,
+div.notion-page-block h3 {
+  font-family: "Signika", "Oswald", "Space Grotesk", YunHei, "Noto Sans SC", "PingFang SC" !important;
 }
 
-/* Code block font */
+/* === 代码块字体（启用连字） === */
 div.notion-code-block div span {
-    font-family: Consolas, monospace !important;
+  font-family: "Fira Code", "JetBrains Mono", Consolas, monospace !important;
+  font-feature-settings: "liga" 1, "calt" 1;
 }
 `;
 
@@ -365,17 +480,17 @@ function restore(): void {
   console.log('Restore complete. Please restart Notion.');
 }
 
-async function patch(): Promise<void> {
+async function patch(force = false): Promise<void> {
   console.log('=== Notion Font Patcher ===\n');
 
   // 如果备份存在且版本匹配，说明当前版本已打过补丁
-  if (fs.existsSync(APP_ASAR_BAK) && fs.existsSync(INFO_PLIST_BAK)) {
+  if (!force && fs.existsSync(APP_ASAR_BAK) && fs.existsSync(INFO_PLIST_BAK)) {
     const currentVer = getNotionVersion(INFO_PLIST);
     const backupVer = getNotionVersion(INFO_PLIST_BAK);
     if (currentVer === backupVer) {
       console.log(
         `Already patched (version ${currentVer}). Nothing to do.\n` +
-          `  Run with --restore to revert.`,
+          `  Run with --restore to revert, or --force to re-patch.`,
       );
       return;
     }
@@ -403,15 +518,18 @@ async function main(): Promise<void> {
 
   if (args.includes('--help') || args.includes('-h')) {
     console.log(
-      'Usage: notion-font-customizer [--restore]\n\n' +
+      'Usage: notion-font-customizer [--restore] [--force]\n\n' +
         'Options:\n' +
         '  --restore  Restore original app.asar from backup\n' +
+        '  --force    Re-patch even if already patched (useful after updating the patcher)\n' +
         '  --help     Show this help message\n\n' +
         'Examples:\n' +
         '  notion-font-customizer           # Apply patch\n' +
         '  notion-font-customizer --restore  # Restore original state\n' +
+        '  notion-font-customizer --force    # Force re-patch current version\n' +
         '  nfc                              # Short alias for apply\n' +
-        '  nfc --restore                    # Short alias for restore',
+        '  nfc --restore                    # Short alias for restore\n' +
+        '  nfc --force                      # Short alias for force re-patch',
     );
     return;
   }
@@ -419,7 +537,7 @@ async function main(): Promise<void> {
   if (args.includes('--restore')) {
     restore();
   } else {
-    await patch();
+    await patch(args.includes('--force'));
   }
 }
 
