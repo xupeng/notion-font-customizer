@@ -11,7 +11,7 @@ allowing live font customization without restarting.
 - Extracts and patches Notion's `app.asar`
 - Injects CSS hot-reload via Electron IPC
 - Watches `~/.config/notion/custom.css` for live changes
-- Ad-hoc re-signs the app bundle
+- Re-signs the app bundle with a stable local code signing identity
 - Supports clean restore to original state
 
 ## Requirements
@@ -40,10 +40,10 @@ nfc --restore                    # Short alias for restore
 
 ## How It Works
 
-1. Backs up `app.asar` and `Info.plist`
+1. Backs up `app.asar` and `Info.plist` outside the app bundle
 2. Extracts the asar, injects IPC code into `preload.js` and `main/index.js`
 3. Repacks the asar, updates the header hash in `Info.plist`
-4. Re-signs `Notion.app` (ad-hoc)
+4. Re-signs `Notion.app` with a stable local code signing identity
 5. Creates a default `custom.css` at `~/.config/notion/custom.css`
 
 Edit `custom.css` to change fonts — changes apply instantly via hot-reload.
@@ -68,6 +68,12 @@ Changes hot-reload instantly — no restart needed.
 ## After Notion Updates
 
 Re-run the patcher. The tool detects version changes and refreshes backups automatically.
+
+The first run creates a local self-signed code signing identity named
+`Notion Font Customizer Local Code Signing` in your login keychain. Notion is
+still no longer signed by its original developer certificate after patching,
+but the local identity is reused across future patch and restore runs on the
+same Mac.
 
 ## License
 

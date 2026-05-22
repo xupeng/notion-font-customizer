@@ -7,18 +7,21 @@ import { execFileSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { fileURLToPath } from "url";
 var NOTION_APP = "/Applications/Notion.app";
 var NOTION_RESOURCES = path.join(NOTION_APP, "Contents/Resources");
 var APP_ASAR = path.join(NOTION_RESOURCES, "app.asar");
-var APP_ASAR_BAK = path.join(NOTION_RESOURCES, "app.asar.bak");
+var LEGACY_APP_ASAR_BAK = path.join(NOTION_RESOURCES, "app.asar.bak");
 var APP_ASAR_UNPACKED = path.join(NOTION_RESOURCES, "app.asar.unpacked");
 var APP_DIR = path.join(NOTION_RESOURCES, "app");
 var PRELOAD_JS = path.join(APP_DIR, ".webpack/renderer/tab_browser_view/preload.js");
 var MAIN_INDEX_JS = path.join(APP_DIR, ".webpack/main/index.js");
 var INFO_PLIST = path.join(NOTION_APP, "Contents/Info.plist");
-var INFO_PLIST_BAK = path.join(NOTION_APP, "Contents/Info.plist.bak");
+var LEGACY_INFO_PLIST_BAK = path.join(NOTION_APP, "Contents/Info.plist.bak");
 var CONFIG_DIR = path.join(os.homedir(), ".config/notion");
 var CUSTOM_CSS = path.join(CONFIG_DIR, "custom.css");
+var SUPPORT_DIR = path.join(os.homedir(), "Library/Application Support/notion-font-customizer");
+var SIGNING_IDENTITY_NAME = "Notion Font Customizer Local Code Signing";
 var INJECT_MARKER = "// [notion-custom-font] injected";
 var INJECT_MAIN_MARKER = "// [notion-custom-font] main process injected";
 var INJECT_JS = String.raw`${INJECT_MARKER}
@@ -251,53 +254,146 @@ function getNotionVersion(plistPath) {
     { encoding: "utf8" }
   ).trim();
 }
-function backupAsar() {
-  if (fs.existsSync(APP_ASAR_BAK) && fs.existsSync(INFO_PLIST_BAK)) {
-    const currentVer = getNotionVersion(INFO_PLIST);
-    const backupVer = getNotionVersion(INFO_PLIST_BAK);
-    if (currentVer !== backupVer) {
-      console.log(`Detected Notion upgrade from ${backupVer} to ${currentVer}. Refreshing backup...`);
-      fs.unlinkSync(APP_ASAR_BAK);
-      fs.unlinkSync(INFO_PLIST_BAK);
-    } else {
-      console.log(`Backup already exists (version ${currentVer}). Skipping.`);
-      return;
+function getBackupPathsForVersion(supportDir, notionVersion) {
+  const dir = path.join(supportDir, "backups", notionVersion);
+  return {
+    dir,
+    appAsar: path.join(dir, "app.asar"),
+    infoPlist: path.join(dir, "Info.plist")
+  };
+}
+function parseCodeSigningIdentities(output, targetName) {
+  const identityRe = /^\s*\d+\)\s+([0-9A-Fa-f]{40})\s+"([^"]+)"$/gm;
+  let match;
+  while ((match = identityRe.exec(output)) !== null) {
+    if (match[2] === targetName) {
+      return { hash: match[1].toUpperCase(), name: match[2] };
     }
   }
-  if (!fs.existsSync(APP_ASAR_BAK)) {
+  return null;
+}
+function buildCodesignArgs(identity, appPath) {
+  return [
+    "--force",
+    "--deep",
+    "--sign",
+    identity,
+    "--timestamp=none",
+    "--preserve-metadata=identifier,entitlements",
+    appPath
+  ];
+}
+function buildPkcs12ExportArgs(p12File, keyFile, certFile, identityName, passphrase) {
+  return [
+    "pkcs12",
+    "-export",
+    "-out",
+    p12File,
+    "-inkey",
+    keyFile,
+    "-in",
+    certFile,
+    "-name",
+    identityName,
+    "-keypbe",
+    "PBE-SHA1-3DES",
+    "-certpbe",
+    "PBE-SHA1-3DES",
+    "-macalg",
+    "sha1",
+    "-passout",
+    `pass:${passphrase}`
+  ];
+}
+function buildSecurityImportArgs(p12File, loginKeychain, passphrase) {
+  return [
+    "import",
+    p12File,
+    "-k",
+    loginKeychain,
+    "-f",
+    "pkcs12",
+    "-P",
+    passphrase,
+    "-T",
+    "/usr/bin/codesign"
+  ];
+}
+function getPatchAction(options) {
+  if (!options.force && options.backupExists && options.currentAsarPatched) {
+    return "resign";
+  }
+  return "patch";
+}
+function getBackupPaths(version = getNotionVersion(INFO_PLIST)) {
+  return getBackupPathsForVersion(SUPPORT_DIR, version);
+}
+function migrateLegacyBackups() {
+  const hasLegacyAppAsar = fs.existsSync(LEGACY_APP_ASAR_BAK);
+  const hasLegacyInfoPlist = fs.existsSync(LEGACY_INFO_PLIST_BAK);
+  if (!hasLegacyAppAsar && !hasLegacyInfoPlist) return;
+  const backupVersion = hasLegacyInfoPlist ? getNotionVersion(LEGACY_INFO_PLIST_BAK) : getNotionVersion(INFO_PLIST);
+  const backup = getBackupPaths(backupVersion);
+  fs.mkdirSync(backup.dir, { recursive: true });
+  if (hasLegacyAppAsar) {
+    if (!fs.existsSync(backup.appAsar)) {
+      console.log(`Migrating legacy app.asar backup \u2192 ${backup.appAsar}`);
+      fs.copyFileSync(LEGACY_APP_ASAR_BAK, backup.appAsar);
+    }
+    fs.unlinkSync(LEGACY_APP_ASAR_BAK);
+  }
+  if (hasLegacyInfoPlist) {
+    if (!fs.existsSync(backup.infoPlist)) {
+      console.log(`Migrating legacy Info.plist backup \u2192 ${backup.infoPlist}`);
+      fs.copyFileSync(LEGACY_INFO_PLIST_BAK, backup.infoPlist);
+    }
+    fs.unlinkSync(LEGACY_INFO_PLIST_BAK);
+  }
+}
+function backupAsar() {
+  migrateLegacyBackups();
+  const currentVer = getNotionVersion(INFO_PLIST);
+  const backup = getBackupPaths(currentVer);
+  if (fs.existsSync(backup.appAsar) && fs.existsSync(backup.infoPlist)) {
+    console.log(`Backup already exists (version ${currentVer}). Skipping.`);
+    return backup;
+  }
+  fs.mkdirSync(backup.dir, { recursive: true });
+  if (!fs.existsSync(backup.appAsar)) {
     if (!fs.existsSync(APP_ASAR)) {
       console.error(`Error: ${APP_ASAR} not found.`);
       process.exit(1);
     }
-    console.log(`Backing up app.asar \u2192 ${APP_ASAR_BAK}`);
-    fs.copyFileSync(APP_ASAR, APP_ASAR_BAK);
+    console.log(`Backing up app.asar \u2192 ${backup.appAsar}`);
+    fs.copyFileSync(APP_ASAR, backup.appAsar);
   }
-  if (!fs.existsSync(INFO_PLIST_BAK)) {
+  if (!fs.existsSync(backup.infoPlist)) {
     if (!fs.existsSync(INFO_PLIST)) {
       console.error(`Error: ${INFO_PLIST} not found.`);
       process.exit(1);
     }
-    console.log(`Backing up Info.plist \u2192 ${INFO_PLIST_BAK}`);
-    fs.copyFileSync(INFO_PLIST, INFO_PLIST_BAK);
+    console.log(`Backing up Info.plist \u2192 ${backup.infoPlist}`);
+    fs.copyFileSync(INFO_PLIST, backup.infoPlist);
   }
+  return backup;
 }
-function extractAsar() {
+function extractAsar(backup) {
   if (fs.existsSync(APP_DIR)) {
     console.log(`Removing old app/ directory: ${APP_DIR}`);
     fs.rmSync(APP_DIR, { recursive: true, force: true });
   }
-  if (!fs.existsSync(APP_ASAR_BAK)) {
-    console.error("Error: backup file app.asar.bak not found.");
+  if (!fs.existsSync(backup.appAsar)) {
+    console.error(`Error: backup file not found: ${backup.appAsar}`);
     process.exit(1);
   }
-  const bakUnpacked = `${APP_ASAR_BAK}.unpacked`;
+  const bakUnpacked = `${backup.appAsar}.unpacked`;
   const symlinkCreated = fs.existsSync(APP_ASAR_UNPACKED) && !fs.existsSync(bakUnpacked);
   if (symlinkCreated) {
-    fs.symlinkSync(path.basename(APP_ASAR_UNPACKED), bakUnpacked);
+    fs.symlinkSync(APP_ASAR_UNPACKED, bakUnpacked);
   }
   try {
-    console.log(`Extracting ${path.basename(APP_ASAR_BAK)} \u2192 ${APP_DIR}`);
-    asar.extractAll(APP_ASAR_BAK, APP_DIR);
+    console.log(`Extracting ${backup.appAsar} \u2192 ${APP_DIR}`);
+    asar.extractAll(backup.appAsar, APP_DIR);
   } finally {
     if (symlinkCreated && fs.existsSync(bakUnpacked)) {
       fs.unlinkSync(bakUnpacked);
@@ -370,13 +466,117 @@ function ensureCustomCss() {
   console.log(`Creating default custom CSS \u2192 ${CUSTOM_CSS}`);
   fs.writeFileSync(CUSTOM_CSS, DEFAULT_CSS, "utf8");
 }
+function findStableSigningIdentity() {
+  const output = execFileSync("security", ["find-identity", "-v", "-p", "codesigning"], {
+    encoding: "utf8"
+  });
+  return parseCodeSigningIdentities(output, SIGNING_IDENTITY_NAME);
+}
+function getLoginKeychain() {
+  try {
+    return execFileSync("security", ["login-keychain"], { encoding: "utf8" }).trim().replace(/^"|"$/g, "");
+  } catch {
+    return path.join(os.homedir(), "Library/Keychains/login.keychain-db");
+  }
+}
+function createStableSigningIdentity() {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "notion-font-customizer-signing-"));
+  fs.chmodSync(tempDir, 448);
+  const opensslConfig = path.join(tempDir, "openssl.cnf");
+  const keyFile = path.join(tempDir, "identity.key");
+  const certFile = path.join(tempDir, "identity.crt");
+  const p12File = path.join(tempDir, "identity.p12");
+  const loginKeychain = getLoginKeychain();
+  const p12Passphrase = crypto.randomBytes(24).toString("hex");
+  try {
+    fs.writeFileSync(
+      opensslConfig,
+      [
+        "[req]",
+        "prompt = no",
+        "distinguished_name = dn",
+        "x509_extensions = v3_req",
+        "",
+        "[dn]",
+        `CN = ${SIGNING_IDENTITY_NAME}`,
+        "",
+        "[v3_req]",
+        "basicConstraints = critical, CA:TRUE",
+        "keyUsage = critical, digitalSignature",
+        "extendedKeyUsage = critical, codeSigning",
+        "subjectKeyIdentifier = hash",
+        ""
+      ].join("\n"),
+      "utf8"
+    );
+    console.log(`Creating local code signing identity: ${SIGNING_IDENTITY_NAME}`);
+    execFileSync("openssl", [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-sha256",
+      "-days",
+      "3650",
+      "-nodes",
+      "-keyout",
+      keyFile,
+      "-out",
+      certFile,
+      "-config",
+      opensslConfig
+    ], { stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync(
+      "openssl",
+      buildPkcs12ExportArgs(p12File, keyFile, certFile, SIGNING_IDENTITY_NAME, p12Passphrase),
+      { stdio: ["ignore", "pipe", "pipe"] }
+    );
+    execFileSync("security", buildSecurityImportArgs(p12File, loginKeychain, p12Passphrase), {
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    execFileSync("security", [
+      "add-trusted-cert",
+      "-r",
+      "trustRoot",
+      "-p",
+      "codeSign",
+      "-k",
+      loginKeychain,
+      certFile
+    ], { stdio: ["ignore", "pipe", "pipe"] });
+  } catch (e) {
+    const err = e;
+    console.error(`Failed to create local signing identity: ${err.stderr?.toString() ?? String(e)}`);
+    process.exit(1);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+  const identity = findStableSigningIdentity();
+  if (!identity) {
+    console.error(
+      `Error: created signing identity was not found by security find-identity.
+Expected identity: ${SIGNING_IDENTITY_NAME}`
+    );
+    process.exit(1);
+  }
+  return identity;
+}
+function ensureStableSigningIdentity() {
+  const existing = findStableSigningIdentity();
+  if (existing) {
+    console.log(`Using local code signing identity: ${existing.name} (${existing.hash})`);
+    return existing;
+  }
+  return createStableSigningIdentity();
+}
 function resignApp() {
   console.log(`
 Removing quarantine attributes: ${NOTION_APP}`);
   execFileSync("xattr", ["-cr", NOTION_APP]);
-  console.log(`Ad-hoc re-signing ${NOTION_APP}...`);
+  const identity = ensureStableSigningIdentity();
+  console.log(`Re-signing ${NOTION_APP} with ${identity.name}...`);
   try {
-    execFileSync("codesign", ["--force", "--deep", "--sign", "-", NOTION_APP], {
+    execFileSync("codesign", buildCodesignArgs(identity.hash, NOTION_APP), {
       stdio: ["ignore", "pipe", "pipe"]
     });
   } catch (e) {
@@ -387,19 +587,22 @@ Removing quarantine attributes: ${NOTION_APP}`);
   console.log("Re-signing complete.");
 }
 function restore() {
-  if (!fs.existsSync(APP_ASAR_BAK)) {
-    console.error("Error: backup file app.asar.bak not found. Cannot restore.");
+  migrateLegacyBackups();
+  const currentVer = getNotionVersion(INFO_PLIST);
+  const backup = getBackupPaths(currentVer);
+  if (!fs.existsSync(backup.appAsar)) {
+    console.error(`Error: backup file not found. Cannot restore: ${backup.appAsar}`);
     process.exit(1);
   }
-  if (fs.existsSync(INFO_PLIST_BAK)) {
-    const currentVer = getNotionVersion(INFO_PLIST);
-    const backupVer = getNotionVersion(INFO_PLIST_BAK);
-    if (currentVer !== backupVer) {
+  if (fs.existsSync(backup.infoPlist)) {
+    const currentVer2 = getNotionVersion(INFO_PLIST);
+    const backupVer = getNotionVersion(backup.infoPlist);
+    if (currentVer2 !== backupVer) {
       console.error(
-        `Error: backup version (${backupVer}) does not match current version (${currentVer}).
+        `Error: backup version (${backupVer}) does not match current version (${currentVer2}).
 Notion has been updated; the old backup is no longer valid.
-Delete the backup files and re-run the patcher:
-  rm ${APP_ASAR_BAK} ${INFO_PLIST_BAK}
+Delete the backup directory and re-run the patcher:
+  rm -rf ${backup.dir}
   notion-font-customizer`
       );
       process.exit(1);
@@ -409,32 +612,49 @@ Delete the backup files and re-run the patcher:
     console.log(`Removing temp directory: ${APP_DIR}`);
     fs.rmSync(APP_DIR, { recursive: true, force: true });
   }
-  console.log(`Restoring ${APP_ASAR_BAK} \u2192 ${APP_ASAR}`);
-  fs.copyFileSync(APP_ASAR_BAK, APP_ASAR);
-  if (fs.existsSync(INFO_PLIST_BAK)) {
-    console.log(`Restoring ${INFO_PLIST_BAK} \u2192 ${INFO_PLIST}`);
-    fs.copyFileSync(INFO_PLIST_BAK, INFO_PLIST);
+  console.log(`Restoring ${backup.appAsar} \u2192 ${APP_ASAR}`);
+  fs.copyFileSync(backup.appAsar, APP_ASAR);
+  if (fs.existsSync(backup.infoPlist)) {
+    console.log(`Restoring ${backup.infoPlist} \u2192 ${INFO_PLIST}`);
+    fs.copyFileSync(backup.infoPlist, INFO_PLIST);
   } else {
-    console.warn("Warning: Info.plist.bak not found. Skipping plist restore.");
+    console.warn(`Warning: Info.plist backup not found. Skipping plist restore: ${backup.infoPlist}`);
   }
   resignApp();
   console.log("Restore complete. Please restart Notion.");
 }
+function isCurrentAsarPatched() {
+  try {
+    const preload = asar.extractFile(APP_ASAR, ".webpack/renderer/tab_browser_view/preload.js").toString("utf8");
+    const mainIndex = asar.extractFile(APP_ASAR, ".webpack/main/index.js").toString("utf8");
+    return preload.includes(INJECT_MARKER) && mainIndex.includes(INJECT_MAIN_MARKER);
+  } catch {
+    return false;
+  }
+}
 async function patch(force = false) {
   console.log("=== Notion Font Patcher ===\n");
-  if (!force && fs.existsSync(APP_ASAR_BAK) && fs.existsSync(INFO_PLIST_BAK)) {
+  migrateLegacyBackups();
+  if (!force) {
     const currentVer = getNotionVersion(INFO_PLIST);
-    const backupVer = getNotionVersion(INFO_PLIST_BAK);
-    if (currentVer === backupVer) {
+    const backup2 = getBackupPaths(currentVer);
+    const action = getPatchAction({
+      force,
+      backupExists: fs.existsSync(backup2.appAsar) && fs.existsSync(backup2.infoPlist),
+      currentAsarPatched: isCurrentAsarPatched()
+    });
+    if (action === "resign") {
       console.log(
-        `Already patched (version ${currentVer}). Nothing to do.
-  Run with --restore to revert, or --force to re-patch.`
+        `Already patched (version ${currentVer}). Ensuring stable local signature.
+  Run with --restore to revert, or --force to re-patch asar contents.`
       );
+      ensureCustomCss();
+      resignApp();
       return;
     }
   }
-  backupAsar();
-  extractAsar();
+  const backup = backupAsar();
+  extractAsar(backup);
   injectPreload();
   injectMainProcess();
   await repackAsar();
@@ -465,7 +685,28 @@ async function main() {
     await patch(args.includes("--force"));
   }
 }
-main().catch((e) => {
-  console.error(String(e));
-  process.exit(1);
-});
+function isDirectRun() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    const modulePath = fs.realpathSync(fileURLToPath(import.meta.url));
+    const entryPath = fs.realpathSync(path.resolve(entry));
+    return modulePath === entryPath;
+  } catch {
+    return false;
+  }
+}
+if (isDirectRun()) {
+  main().catch((e) => {
+    console.error(String(e));
+    process.exit(1);
+  });
+}
+export {
+  buildCodesignArgs,
+  buildPkcs12ExportArgs,
+  buildSecurityImportArgs,
+  getBackupPathsForVersion,
+  getPatchAction,
+  parseCodeSigningIdentities
+};

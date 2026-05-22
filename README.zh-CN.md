@@ -10,7 +10,7 @@ macOS Notion 桌面应用的自定义字体补丁工具。
 - 解包并修补 Notion 的 `app.asar`
 - 通过 Electron IPC 注入 CSS 热重载
 - 监听 `~/.config/notion/custom.css` 文件变更，实时生效
-- 对应用包进行临时重签名
+- 使用稳定的本地代码签名身份重签应用包
 - 支持一键还原至原始状态
 
 ## 环境要求
@@ -39,10 +39,10 @@ nfc --restore                    # restore 的简短别名
 
 ## 工作原理
 
-1. 备份 `app.asar` 和 `Info.plist`
+1. 在应用包外备份 `app.asar` 和 `Info.plist`
 2. 解包 asar，向 `preload.js` 和 `main/index.js` 注入 IPC 代码
 3. 重新打包 asar，更新 `Info.plist` 中的 header hash
-4. 对 `Notion.app` 进行临时重签名（ad-hoc）
+4. 使用稳定的本地代码签名身份重签 `Notion.app`
 5. 在 `~/.config/notion/custom.css` 创建默认样式文件
 
 编辑 `custom.css` 即可更换字体，修改通过热重载立即生效。
@@ -67,6 +67,10 @@ div.notion-page-content * {
 ## Notion 更新后
 
 重新运行补丁工具即可。该工具会自动检测版本变更并刷新备份。
+
+首次运行会在 login keychain 中创建名为 `Notion Font Customizer Local Code Signing`
+的本地自签代码签名身份。补丁后的 Notion 仍不再使用官方开发者证书签名，但同一台
+Mac 上后续 patch 和 restore 会复用这个本地身份。
 
 ## 许可证
 
