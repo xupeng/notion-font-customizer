@@ -47,6 +47,23 @@ nfc --restore                    # restore 的简短别名
 
 编辑 `custom.css` 即可更换字体，修改通过热重载立即生效。
 
+## Google Fonts
+
+开箱即用，无需额外配置 —— CSP 已自动放宽，preconnect 预连接也会自动注入。
+
+1. 在 [fonts.google.com](https://fonts.google.com) 找到字体，复制其 `@import` URL。
+2. 将以下内容加入 `~/.config/notion/custom.css`：
+
+```css
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700&display=swap');
+
+div.notion-page-content * {
+    font-family: 'Noto Serif SC', serif !important;
+}
+```
+
+修改后热重载立即生效，无需重启 Notion。
+
 ## Notion 更新后
 
 重新运行补丁工具即可。该工具会自动检测版本变更并刷新备份。

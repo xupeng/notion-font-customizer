@@ -48,6 +48,23 @@ nfc --restore                    # Short alias for restore
 
 Edit `custom.css` to change fonts — changes apply instantly via hot-reload.
 
+## Google Fonts
+
+Google Fonts work out of the box — CSP is relaxed and preconnect hints are injected automatically.
+
+1. Find a font on [fonts.google.com](https://fonts.google.com) and copy its `@import` URL.
+2. Add it to `~/.config/notion/custom.css`:
+
+```css
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700&display=swap');
+
+div.notion-page-content * {
+    font-family: 'Noto Serif SC', serif !important;
+}
+```
+
+Changes hot-reload instantly — no restart needed.
+
 ## After Notion Updates
 
 Re-run the patcher. The tool detects version changes and refreshes backups automatically.
