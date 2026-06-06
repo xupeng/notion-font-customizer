@@ -30,7 +30,7 @@ test('parseCodeSigningIdentities returns null when the target identity is absent
   assert.equal(parseCodeSigningIdentities('     0 valid identities found', 'Missing Identity'), null);
 });
 
-test('buildCodesignArgs uses stable identity without preserving runtime flags or old requirements', () => {
+test('buildCodesignArgs uses stable identity without preserving entitlements, runtime flags, or old requirements', () => {
   const args = buildCodesignArgs('ABCDEF0123456789ABCDEF0123456789ABCDEF01', '/Applications/Notion.app');
 
   assert.deepEqual(args, [
@@ -39,9 +39,10 @@ test('buildCodesignArgs uses stable identity without preserving runtime flags or
     '--sign',
     'ABCDEF0123456789ABCDEF0123456789ABCDEF01',
     '--timestamp=none',
-    '--preserve-metadata=identifier,entitlements',
+    '--preserve-metadata=identifier',
     '/Applications/Notion.app',
   ]);
+  assert.equal(args.some((arg) => arg.includes('entitlements')), false);
   assert.equal(args.some((arg) => arg.includes('requirements')), false);
   assert.equal(args.some((arg) => arg.includes('runtime')), false);
   assert.equal(args.some((arg) => arg.includes('flags')), false);

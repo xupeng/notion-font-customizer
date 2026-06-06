@@ -20,10 +20,133 @@ var INFO_PLIST = path.join(NOTION_APP, "Contents/Info.plist");
 var LEGACY_INFO_PLIST_BAK = path.join(NOTION_APP, "Contents/Info.plist.bak");
 var CONFIG_DIR = path.join(os.homedir(), ".config/notion");
 var CUSTOM_CSS = path.join(CONFIG_DIR, "custom.css");
+var GIST_CONFIG = path.join(CONFIG_DIR, "gist.json");
 var SUPPORT_DIR = path.join(os.homedir(), "Library/Application Support/notion-font-customizer");
 var SIGNING_IDENTITY_NAME = "Notion Font Customizer Local Code Signing";
+var GIST_API_VERSION = "2022-11-28";
+var SNAPSHOT_VERSION = 1;
 var INJECT_MARKER = "// [notion-custom-font] injected";
 var INJECT_MAIN_MARKER = "// [notion-custom-font] main process injected";
+function canonicalRemoteSnapshotContent(input) {
+  return JSON.stringify({
+    version: input.version,
+    enabled: input.enabled,
+    css: input.css
+  });
+}
+function computeRemoteSnapshotHash(input) {
+  return crypto.createHash("sha256").update(canonicalRemoteSnapshotContent(input)).digest("hex");
+}
+function validateRemoteSnapshot(value) {
+  if (!isRecord(value)) {
+    return { ok: false, error: "invalid-json" };
+  }
+  if (value.version !== SNAPSHOT_VERSION || typeof value.enabled !== "boolean" || typeof value.css !== "string" || typeof value.revision !== "number" || typeof value.updatedAt !== "string" || typeof value.updatedBy !== "string" || typeof value.contentHash !== "string") {
+    return { ok: false, error: "invalid-json" };
+  }
+  const expectedHash = computeRemoteSnapshotHash({
+    version: SNAPSHOT_VERSION,
+    enabled: value.enabled,
+    css: value.css
+  });
+  if (expectedHash !== value.contentHash) {
+    return { ok: false, error: "hash-mismatch" };
+  }
+  return { ok: true, snapshot: value };
+}
+function getCssFromRemoteSnapshot(snapshot) {
+  return snapshot.enabled ? snapshot.css : "";
+}
+function normalizeGistConfig(value) {
+  if (!isRecord(value)) return null;
+  if (typeof value.enabled !== "boolean" || typeof value.gistId !== "string") return null;
+  const githubToken = typeof value.githubToken === "string" ? value.githubToken.trim() : "";
+  const gistId = value.gistId.trim();
+  if (value.enabled && !gistId) return null;
+  return {
+    enabled: value.enabled,
+    gistId,
+    githubToken
+  };
+}
+function readGistConfigFile(configPath = GIST_CONFIG) {
+  try {
+    return normalizeGistConfig(JSON.parse(fs.readFileSync(configPath, "utf8")));
+  } catch {
+    return null;
+  }
+}
+function writeGistConfig(configPath, input) {
+  const config = {
+    enabled: input.enabled ?? true,
+    gistId: input.gistId.trim(),
+    githubToken: input.githubToken?.trim() ?? ""
+  };
+  if (config.enabled && !config.gistId) {
+    throw new Error("Gist ID is required when Gist style source is enabled.");
+  }
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}
+`, {
+    encoding: "utf8",
+    mode: 384
+  });
+  fs.chmodSync(configPath, 384);
+  return config;
+}
+function disableGistConfig(configPath = GIST_CONFIG) {
+  const existing = readGistConfigFile(configPath) ?? {
+    enabled: false,
+    gistId: "",
+    githubToken: ""
+  };
+  return writeGistConfig(configPath, {
+    enabled: false,
+    gistId: existing.gistId,
+    githubToken: existing.githubToken
+  });
+}
+function buildGistRequestHeaders(githubToken = "") {
+  const headers = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "notion-font-customizer",
+    "X-GitHub-Api-Version": GIST_API_VERSION
+  };
+  const token = githubToken.trim();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  return headers;
+}
+function parseCliAction(args) {
+  if (args.includes("--help") || args.includes("-h")) return { kind: "help" };
+  if (args.includes("--restore")) return { kind: "restore" };
+  if (args.includes("--disable-gist")) return { kind: "disable-gist" };
+  if (args.includes("--configure-gist")) {
+    return {
+      kind: "configure-gist",
+      gistId: readCliOption(args, "--gist-id"),
+      githubToken: readCliOption(args, "--github-token", "")
+    };
+  }
+  return { kind: "patch", force: args.includes("--force") };
+}
+function readCliOption(args, name, fallback) {
+  const index = args.indexOf(name);
+  if (index === -1) {
+    if (fallback !== void 0) return fallback;
+    throw new Error(`${name} is required.`);
+  }
+  const value = args[index + 1];
+  if (!value || value.startsWith("--")) {
+    if (fallback !== void 0) return fallback;
+    throw new Error(`${name} requires a value.`);
+  }
+  return value.trim();
+}
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 var INJECT_JS = String.raw`${INJECT_MARKER}
 ;(function() {
   const { ipcRenderer } = require('electron');
@@ -42,7 +165,7 @@ var INJECT_JS = String.raw`${INJECT_MARKER}
   async function loadInitialCSS() {
     try {
       const css = await ipcRenderer.invoke('notion-custom:get-css');
-      if (css) applyCSS(css);
+      applyCSS(css);
     } catch (e) { console.error('[notion-custom-font]', e); }
   }
 
@@ -63,16 +186,112 @@ var INJECT_MAIN_JS = String.raw`${INJECT_MAIN_MARKER}
   const fs = require('fs');
   const https = require('https');
   const path = require('path');
-  const cssPath = path.join(
-    process.env.HOME || '', '.config', 'notion', 'custom.css'
-  );
-  const fontsDir = path.join(process.env.HOME || '', '.config', 'notion', 'fonts');
+  const configDir = path.join(process.env.HOME || '', '.config', 'notion');
+  const cssPath = path.join(configDir, 'custom.css');
+  const gistConfigPath = path.join(configDir, 'gist.json');
+  const gistCachePath = path.join(configDir, 'gist-cache.json');
+  const fontsDir = path.join(configDir, 'fonts');
+  const gistSyncFileName = 'notion-stylish.json';
+  const snapshotVersion = 1;
+  let gistCssPromise = null;
   try { fs.mkdirSync(fontsDir, { recursive: true }); } catch(e) {}
 
   function readCSS() {
     try {
       return fs.existsSync(cssPath) ? fs.readFileSync(cssPath, 'utf8') : '';
     } catch (e) { return ''; }
+  }
+
+  function readJSONFile(filePath) {
+    try {
+      return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function readGistConfig() {
+    const value = readJSONFile(gistConfigPath);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    if (typeof value.enabled !== 'boolean' || typeof value.gistId !== 'string') return null;
+    const gistId = value.gistId.trim();
+    const githubToken = typeof value.githubToken === 'string' ? value.githubToken.trim() : '';
+    if (value.enabled && !gistId) return null;
+    return { enabled: value.enabled, gistId, githubToken };
+  }
+
+  function isGistEnabled() {
+    const config = readGistConfig();
+    return !!(config && config.enabled);
+  }
+
+  function canonicalRemoteSnapshotContent(input) {
+    return JSON.stringify({
+      version: input.version,
+      enabled: input.enabled,
+      css: input.css,
+    });
+  }
+
+  function computeRemoteSnapshotHash(input) {
+    return crypto.createHash('sha256').update(canonicalRemoteSnapshotContent(input)).digest('hex');
+  }
+
+  function validateRemoteSnapshot(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return { ok: false, error: 'invalid-json' };
+    }
+    if (
+      value.version !== snapshotVersion ||
+      typeof value.enabled !== 'boolean' ||
+      typeof value.css !== 'string' ||
+      typeof value.revision !== 'number' ||
+      typeof value.updatedAt !== 'string' ||
+      typeof value.updatedBy !== 'string' ||
+      typeof value.contentHash !== 'string'
+    ) {
+      return { ok: false, error: 'invalid-json' };
+    }
+    const expectedHash = computeRemoteSnapshotHash({
+      version: snapshotVersion,
+      enabled: value.enabled,
+      css: value.css,
+    });
+    if (expectedHash !== value.contentHash) {
+      return { ok: false, error: 'hash-mismatch' };
+    }
+    return { ok: true, snapshot: value };
+  }
+
+  function getCssFromRemoteSnapshot(snapshot) {
+    return snapshot.enabled ? snapshot.css : '';
+  }
+
+  function readCachedSnapshot() {
+    const validation = validateRemoteSnapshot(readJSONFile(gistCachePath));
+    return validation.ok ? validation.snapshot : null;
+  }
+
+  function writeCachedSnapshot(snapshot) {
+    try {
+      fs.mkdirSync(configDir, { recursive: true });
+      fs.writeFileSync(gistCachePath, JSON.stringify(snapshot, null, 2) + '\n', {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
+      fs.chmodSync(gistCachePath, 0o600);
+    } catch (e) {}
+  }
+
+  function buildGistRequestHeaders(githubToken) {
+    const headers = {
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'notion-font-customizer',
+      'X-GitHub-Api-Version': '2022-11-28',
+    };
+    const token = (githubToken || '').trim();
+    if (token) headers.Authorization = 'Bearer ' + token;
+    return headers;
   }
 
   function fetchURL(url) {
@@ -89,6 +308,86 @@ var INJECT_MAIN_JS = String.raw`${INJECT_MAIN_MARKER}
         res.on('end', () => resolve(data));
       }).on('error', reject);
     });
+  }
+
+  function fetchJSON(url, headers) {
+    return new Promise((resolve, reject) => {
+      const req = https.get(url, { headers }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          fetchJSON(res.headers.location, headers).then(resolve, reject);
+          return;
+        }
+        let data = '';
+        res.setEncoding('utf8');
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            reject(new Error('GitHub API failed with HTTP ' + res.statusCode));
+            return;
+          }
+          try {
+            resolve(JSON.parse(data));
+          } catch (e) {
+            reject(new Error('GitHub API response is not valid JSON'));
+          }
+        });
+      });
+      req.setTimeout(15000, () => req.destroy(new Error('GitHub API request timed out')));
+      req.on('error', reject);
+    });
+  }
+
+  async function fetchGistSnapshot(config) {
+    const body = await fetchJSON(
+      'https://api.github.com/gists/' + encodeURIComponent(config.gistId),
+      buildGistRequestHeaders(config.githubToken)
+    );
+    const file = body && body.files && body.files[gistSyncFileName];
+    if (!file || typeof file.content !== 'string') {
+      throw new Error('Gist does not contain ' + gistSyncFileName);
+    }
+    if (file.truncated) {
+      throw new Error(gistSyncFileName + ' is truncated by GitHub API');
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(file.content);
+    } catch (e) {
+      throw new Error(gistSyncFileName + ' is not valid JSON');
+    }
+    const validation = validateRemoteSnapshot(parsed);
+    if (!validation.ok) {
+      throw new Error('Invalid ' + gistSyncFileName + ': ' + validation.error);
+    }
+    return validation.snapshot;
+  }
+
+  function formatError(error) {
+    if (!error) return 'Unknown error';
+    if (error instanceof Error) return error.message || error.name || 'Unknown error';
+    return String(error);
+  }
+
+  async function readGistCSS(config) {
+    try {
+      const snapshot = await fetchGistSnapshot(config);
+      writeCachedSnapshot(snapshot);
+      return resolveImports(getCssFromRemoteSnapshot(snapshot));
+    } catch (e) {
+      console.error('[notion-custom-font] Failed to fetch Gist style:', formatError(e));
+      const cached = readCachedSnapshot();
+      return cached ? resolveImports(getCssFromRemoteSnapshot(cached)) : null;
+    }
+  }
+
+  async function readActiveCSS() {
+    const config = readGistConfig();
+    if (config && config.enabled) {
+      if (!gistCssPromise) gistCssPromise = readGistCSS(config);
+      const gistCSS = await gistCssPromise;
+      if (gistCSS !== null) return gistCSS;
+    }
+    return resolveImports(readCSS());
   }
 
   function fetchBinary(url) {
@@ -162,20 +461,22 @@ var INJECT_MAIN_JS = String.raw`${INJECT_MAIN_MARKER}
     return resolveFontURLs(resolved);
   }
 
-  ipcMain.handle('notion-custom:get-css', async () => resolveImports(readCSS()));
+  ipcMain.handle('notion-custom:get-css', async () => readActiveCSS());
 
-  // Hot reload: fs.watch → broadcast to all renderers
+  // Hot reload local custom.css only when the Gist source is disabled.
   try {
-    let debounceTimer;
-    fs.watch(cssPath, () => {
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(async () => {
-        const css = await resolveImports(readCSS());
-        webContents.getAllWebContents().forEach(wc => {
-          if (!wc.isDestroyed()) wc.send('notion-custom:css-changed', css);
-        });
-      }, 200);
-    });
+    if (!isGistEnabled()) {
+      let debounceTimer;
+      fs.watch(cssPath, () => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(async () => {
+          const css = await resolveImports(readCSS());
+          webContents.getAllWebContents().forEach(wc => {
+            if (!wc.isDestroyed()) wc.send('notion-custom:css-changed', css);
+          });
+        }, 200);
+      });
+    }
   } catch (e) {}
 
 })();`;
@@ -279,7 +580,7 @@ function buildCodesignArgs(identity, appPath) {
     "--sign",
     identity,
     "--timestamp=none",
-    "--preserve-metadata=identifier,entitlements",
+    "--preserve-metadata=identifier",
     appPath
   ];
 }
@@ -673,16 +974,32 @@ Patch applied!
 }
 async function main() {
   const args = process.argv.slice(2);
-  if (args.includes("--help") || args.includes("-h")) {
+  const action = parseCliAction(args);
+  if (action.kind === "help") {
     console.log(
-      "Usage: notion-font-customizer [--restore] [--force]\n\nOptions:\n  --restore  Restore original app.asar from backup\n  --force    Re-patch even if already patched (useful after updating the patcher)\n  --help     Show this help message\n\nExamples:\n  notion-font-customizer           # Apply patch\n  notion-font-customizer --restore  # Restore original state\n  notion-font-customizer --force    # Force re-patch current version\n  nfc                              # Short alias for apply\n  nfc --restore                    # Short alias for restore\n  nfc --force                      # Short alias for force re-patch"
+      "Usage: notion-font-customizer [--restore] [--force]\n       notion-font-customizer --configure-gist --gist-id <id> [--github-token <token>]\n       notion-font-customizer --disable-gist\n\nOptions:\n  --restore  Restore original app.asar from backup\n  --force    Re-patch even if already patched (useful after updating the patcher)\n  --configure-gist  Use notion-stylish.json from a GitHub Gist as the style source\n  --gist-id <id>    GitHub Gist ID for --configure-gist\n  --github-token <token>  Optional token for authenticated Gist reads\n  --disable-gist    Disable the Gist style source and use local custom.css\n  --help     Show this help message\n\nExamples:\n  notion-font-customizer           # Apply patch\n  notion-font-customizer --restore  # Restore original state\n  notion-font-customizer --force    # Force re-patch current version\n  notion-font-customizer --configure-gist --gist-id abc123\n  nfc                              # Short alias for apply\n  nfc --restore                    # Short alias for restore\n  nfc --force                      # Short alias for force re-patch"
     );
     return;
   }
-  if (args.includes("--restore")) {
+  if (action.kind === "configure-gist") {
+    writeGistConfig(GIST_CONFIG, {
+      enabled: true,
+      gistId: action.gistId,
+      githubToken: action.githubToken
+    });
+    console.log(`Gist style source configured: ${GIST_CONFIG}`);
+    console.log("GitHub token: stored locally only" + (action.githubToken ? "" : " (none configured)"));
+    return;
+  }
+  if (action.kind === "disable-gist") {
+    disableGistConfig(GIST_CONFIG);
+    console.log(`Gist style source disabled: ${GIST_CONFIG}`);
+    return;
+  }
+  if (action.kind === "restore") {
     restore();
   } else {
-    await patch(args.includes("--force"));
+    await patch(action.force);
   }
 }
 function isDirectRun() {
@@ -704,9 +1021,19 @@ if (isDirectRun()) {
 }
 export {
   buildCodesignArgs,
+  buildGistRequestHeaders,
   buildPkcs12ExportArgs,
   buildSecurityImportArgs,
+  canonicalRemoteSnapshotContent,
+  computeRemoteSnapshotHash,
+  disableGistConfig,
   getBackupPathsForVersion,
+  getCssFromRemoteSnapshot,
   getPatchAction,
-  parseCodeSigningIdentities
+  normalizeGistConfig,
+  parseCliAction,
+  parseCodeSigningIdentities,
+  readGistConfigFile,
+  validateRemoteSnapshot,
+  writeGistConfig
 };
