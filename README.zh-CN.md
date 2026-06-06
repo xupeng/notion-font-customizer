@@ -10,6 +10,7 @@ macOS Notion 桌面应用的自定义字体补丁工具。
 - 解包并修补 Notion 的 `app.asar`
 - 通过 Electron IPC 注入 CSS 热重载
 - 监听 `~/.config/notion/custom.css` 文件变更，实时生效
+- 可读取 notion-stylish 使用的同一份 GitHub Gist `notion-stylish.json`
 - 使用稳定的本地代码签名身份重签应用包
 - 支持一键还原至原始状态
 
@@ -25,6 +26,7 @@ macOS Notion 桌面应用的自定义字体补丁工具。
 ```bash
 npx github:xupeng/notion-font-customizer          # 应用补丁
 npx github:xupeng/notion-font-customizer --restore  # 还原原始状态
+npx github:xupeng/notion-font-customizer --configure-gist --gist-id abc123
 ```
 
 ### 全局安装
@@ -33,6 +35,7 @@ npx github:xupeng/notion-font-customizer --restore  # 还原原始状态
 npm install -g github:xupeng/notion-font-customizer
 notion-font-customizer          # 应用补丁
 notion-font-customizer --restore  # 还原原始状态
+notion-font-customizer --configure-gist --gist-id abc123
 nfc                              # apply 的简短别名
 nfc --restore                    # restore 的简短别名
 ```
@@ -46,6 +49,31 @@ nfc --restore                    # restore 的简短别名
 5. 在 `~/.config/notion/custom.css` 创建默认样式文件
 
 编辑 `custom.css` 即可更换字体，修改通过热重载立即生效。
+
+## GitHub Gist 样式来源
+
+如果要复用 `notion-stylish` 的同一份样式来源，配置 Gist ID：
+
+```bash
+notion-font-customizer --configure-gist --gist-id abc123
+```
+
+工具会在 Notion 启动时读取该 Gist 中的 `notion-stylish.json`。只读模式下
+GitHub token 是可选的：
+
+```bash
+notion-font-customizer --configure-gist --gist-id abc123 --github-token ghp_xxx
+```
+
+配置写入 `~/.config/notion/gist.json`，并使用本地私有文件权限。token 不会写入缓存。
+有效的远端快照会缓存到 `~/.config/notion/gist-cache.json`；如果远端和缓存都不可用，
+则回退到本地 `custom.css`。
+
+禁用 Gist 来源并回到本地 `custom.css` 热重载模式：
+
+```bash
+notion-font-customizer --disable-gist
+```
 
 ## Google Fonts
 
