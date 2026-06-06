@@ -100,6 +100,19 @@ div.notion-page-content * {
 的本地自签代码签名身份。补丁后的 Notion 仍不再使用官方开发者证书签名，但同一台
 Mac 上后续 patch 和 restore 会复用这个本地身份。
 
+## Codex Code Review
+
+仓库包含 `AGENTS.md`，用于提供 Codex PR review 指南。手动请求 GitHub PR review
+时，在 PR 评论中写：
+
+```md
+@codex review
+```
+
+如果希望每个新 PR 自动触发 review，请在
+<https://chatgpt.com/codex/settings/code-review> 为该仓库启用 **Code review**
+和 **Automatic reviews**。
+
 ## 许可证
 
 MIT

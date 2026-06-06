@@ -104,6 +104,19 @@ still no longer signed by its original developer certificate after patching,
 but the local identity is reused across future patch and restore runs on the
 same Mac.
 
+## Codex Code Review
+
+This repository includes `AGENTS.md` with Codex review guidelines. To request a
+manual GitHub PR review, comment:
+
+```md
+@codex review
+```
+
+To review every new PR automatically, enable **Code review** and **Automatic
+reviews** for this repository in
+<https://chatgpt.com/codex/settings/code-review>.
+
 ## License
 
 MIT
